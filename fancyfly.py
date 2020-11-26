@@ -40,12 +40,11 @@ def lispy(node):
         case ["Module", program, _]:
              return ["Begin", *(lispy(node) for node in program)]
         case ["FunctionDef", name, arguments, body, _, _, _]:
-            return [
-                 "FunctionDef",
-                 name,
-                 lispy(arguments),
-                 ["Begin", *(lispy(node) for node in body)]
-            ]
+            return ["Assign", name, [
+                "Function",
+                lispy(arguments),
+                ["Begin", *(lispy(node) for node in body)]
+            ]]
         case ["Assign", target, value, _]:
             return ["Assign", target[0][1], lispy(value)]
         case ["arguments", _, args, *_]:
@@ -159,21 +158,48 @@ def cps(node):
     match node:
         case ["Constant", x]:
             return ["Function", ["k"], ["Call", "k", x]]
-        case ["Assign", target, value] as assign:
+        case ["If", p, t, e]:
+            return ["Call", cps(p),
+                    ["Function", ["kif"],
+                     ["If", "kif",
+                      ["Call", cps(t), "k"],
+                      ["Call", cps(e), "k"]]]]
+        case ["Assign", target, value]:
             return ["Function", ["k"],
-                    ["Call", cps(value),
-                     ["Function", ["v"],
-                      ["Assign", target,
-                       ["Function", ["k"],
-                        ["Call", "k", "v"]]],
-                      NONE]]]
+                    ["Assign", target, cps(value)],
+                    NONE]
         case ["Begin", *args]:
             return ["Function", ["k"], *cps_begin(args)]
-        # case ["FunctionDef", name, args, body]:
-        #      args.insert(0, "k")
-        #      return ["FunctionDef", name, args, cps(body)]
-        case ["Call", name, *args]:
-            return ["Function", ["k"], ["Call", name, "k", *(cps(arg) for arg in args)]]
+        case ["Function", [], body]:
+             return ["Function", ["k"],
+                     ["Call", "k", cps(body)]]
+        case ["Function", args, body]:
+             args.insert(0, "k")
+             return ["Function", ["k"],
+                     ["Call", "k", ["Function", args, ["Call", cps(body), "k"]]]]
+        case ["Call", name]:
+            return ["Function", ["k"],
+                    ["Call", name,
+                     ["Function", ["f"],
+                      ["Call", "f", "k"]]]]
+        case ["Call", name, a, b]:
+            if name in ["add", "minus", "Eq"]:
+                return ["Function", ["k"],
+                        ["Call", a,
+                         ["Function", ["v0"],
+                          ["Call", b,
+                           ["Function", ["v1"],
+                            ["Call", "k", ["Call", name, "v0", "v1"]]]]]]]
+            return ["Function", ["k"],
+                    ["Call", name,
+                     ["Function", ["f"],
+                      ["Call", a,
+                       ["Function", ["v0"],
+                        ["Call", b,
+                         ["Function", ["v1"],
+                          ["Call", "f", "k",
+                           ["Function", ["k"], ["Call", "k", "v0"]],
+                           ["Function", ["k"], ["Call", "k", "v1"]]]]]]]]]]
         case _:
             if isinstance(node, (str, int)):
                 return node
@@ -182,26 +208,43 @@ def cps(node):
 
 
 def wrap(node):
-    return ["Call", node, "print"]
+    return ["Call", node, "pk"]
 
 
-def schemize(node):
+def javascripter(node):
     match node:
+        case ["Begin", *exprs]:
+            return ";\n ".join(javascripter(expr) for expr in exprs);
+        case ["Constant", value]:
+            return str(value)
+        case ["If", p, t, e]:
+            return "({} ? {} : {})".format(javascripter(p), javascripter(t), javascripter(e))
+        case ["Function", args, expr0]:
+            return "function ({}) {{ return {}; }}".format(
+                ", ".join(javascripter(arg) for arg in args),
+                javascripter(expr0),
+            )
         case ["Function", args, *exprs]:
-            return "(lambda ({}) {})".format(
-                " ".join(schemize(arg) for arg in args),
-                " ".join(schemize(expr) for expr in exprs)
+            return "function ({}) {{ {}; return {}; }}".format(
+                ", ".join(javascripter(arg) for arg in args),
+                "; ".join(javascripter(expr) for expr in exprs[:-1]),
+                javascripter(exprs[-1]),
             )
         case ["Assign", t, v]:
-            return "(set! {} {})".format(t, schemize(v))
-        case ["Call", *args]:
-            return "({})".format(" ".join(schemize(arg) for arg in args))
+            return "{} = {}".format(t, javascripter(v))
+        case ["Call", func, *args]:
+            return "({})({})".format(
+                javascripter(func),
+                ", ".join(javascripter(arg) for arg in args)
+            )
         case _:
+            if node is None:
+                return "null"
             return str(node)
 
 
 def ppk(*x):
-    pprint(x)
+    pprint(x, sys.stderr)
     return x[-1]
 
 
@@ -213,10 +256,11 @@ pipeline = [
     if_predicate,
     terminal_arguments,
     flatten_begin,
+    ppk,
     cps,
     ppk,
     wrap,
-    schemize,
+    javascripter,
     print,
 ]
 
