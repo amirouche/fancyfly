@@ -7,4 +7,4 @@ def fibo(k):
         else:
             return add(fibo(minus(k, 1)), fibo(minus(k, 2)))
 
-fibo(10000)
+fibo(3)
